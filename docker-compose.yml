@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: ai-order-backend:latest
+    container_name: aoa-backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      DATABASE_URL: /data/orders.sqlite3
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      USE_LLM: ${USE_LLM:-false}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-5}
+      BRAVO_API_URL: ${BRAVO_API_URL:-}
+      BRAVO_API_KEY: ${BRAVO_API_KEY:-}
+    volumes:
+      - backend_data:/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    image: ai-order-nginx:latest
+    container_name: aoa-nginx
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  backend_data:

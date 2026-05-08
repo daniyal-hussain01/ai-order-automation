@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>AI Order Automation — Review Console</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif; }
+  .pulse-dot::before { content:""; display:inline-block; width:8px; height:8px; border-radius:9999px;
+       background:#10b981; margin-right:6px; box-shadow:0 0 0 0 rgba(16,185,129,.7);
+       animation:pulse 2s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(16,185,129,.7);} 70%{box-shadow:0 0 0 10px rgba(16,185,129,0);} 100%{box-shadow:0 0 0 0 rgba(16,185,129,0);} }
+  .conf-bar { height: 4px; background: #e5e7eb; border-radius: 9999px; overflow:hidden; }
+  .conf-bar > div { height: 100%; background: linear-gradient(90deg, #ef4444, #f59e0b, #10b981); }
+  .step.active { color: #2563eb; font-weight: 600; }
+  .step.done { color: #10b981; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+<header class="bg-white border-b">
+  <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 grid place-items-center text-white font-bold">AI</div>
+      <div>
+        <h1 class="text-lg font-semibold leading-none">Order Automation Console</h1>
+        <p class="text-xs text-slate-500 mt-1">OCR · AI Parsing · Bravo ERP Sync</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-4">
+      <span id="health" class="text-xs text-slate-500 pulse-dot">connecting…</span>
+      <a href="/api/v1/health" class="text-xs text-blue-600 hover:underline" target="_blank">API</a>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+  <!-- LEFT: Upload + Pipeline -->
+  <section class="lg:col-span-4 space-y-4">
+    <div class="bg-white rounded-xl border p-5 shadow-sm">
+      <h2 class="font-semibold text-sm mb-3">1. Upload order document</h2>
+      <label class="block border-2 border-dashed border-slate-300 hover:border-blue-500
+                    rounded-lg p-6 text-center cursor-pointer transition">
+        <input id="file" type="file" class="hidden"
+               accept="image/*,application/pdf" />
+        <div class="text-slate-400 text-3xl mb-2">📄</div>
+        <div class="text-sm font-medium">Drop file or click to browse</div>
+        <div class="text-xs text-slate-500 mt-1">PNG · JPG · PDF · up to 20 MB</div>
+      </label>
+      <div id="filename" class="mt-3 text-xs text-slate-500 truncate"></div>
+      <button id="processBtn" class="mt-3 w-full py-2.5 rounded-lg bg-blue-600 text-white
+                                      font-medium hover:bg-blue-700 disabled:opacity-50
+                                      disabled:cursor-not-allowed transition">
+        Process with AI
+      </button>
+    </div>
+
+    <div class="bg-white rounded-xl border p-5 shadow-sm">
+      <h2 class="font-semibold text-sm mb-3">Pipeline</h2>
+      <ol class="space-y-2 text-sm">
+        <li id="step-upload"  class="step">○ Upload</li>
+        <li id="step-ocr"     class="step">○ OCR extraction</li>
+        <li id="step-parse"   class="step">○ AI parsing</li>
+        <li id="step-review"  class="step">○ Human review</li>
+        <li id="step-bravo"   class="step">○ Push to Bravo</li>
+      </ol>
+    </div>
+
+    <div class="bg-white rounded-xl border p-5 shadow-sm">
+      <h2 class="font-semibold text-sm mb-3">Recent orders</h2>
+      <div id="recent" class="text-xs space-y-2 text-slate-600"></div>
+    </div>
+  </section>
+
+  <!-- RIGHT: OCR text + Review form -->
+  <section class="lg:col-span-8 space-y-4">
+
+    <div class="bg-white rounded-xl border p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="font-semibold text-sm">OCR output</h2>
+        <span id="ocrConf" class="text-xs text-slate-500"></span>
+      </div>
+      <pre id="ocrText" class="text-xs bg-slate-50 border rounded-lg p-3 max-h-44
+                                overflow-auto whitespace-pre-wrap text-slate-700">No document processed yet.</pre>
+    </div>
+
+    <div class="bg-white rounded-xl border p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold text-sm">2. Review &amp; correct</h2>
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-slate-500">Parser confidence</span>
+          <div class="conf-bar w-32"><div id="confFill" style="width:0%"></div></div>
+          <span id="confPct" class="text-xs font-medium w-10 text-right">0%</span>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+        <label class="block">
+          <span class="text-xs text-slate-500">Customer</span>
+          <input id="f_customer" class="mt-1 w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-slate-500">PO Number</span>
+          <input id="f_po" class="mt-1 w-full px-3 py-2 border rounded-lg" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-slate-500">Order Date</span>
+          <input id="f_date" type="date" class="mt-1 w-full px-3 py-2 border rounded-lg" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-slate-500">Currency</span>
+          <select id="f_currency" class="mt-1 w-full px-3 py-2 border rounded-lg">
+            <option>USD</option><option>EUR</option><option>GBP</option>
+            <option>PKR</option><option>AED</option><option>JPY</option><option>INR</option>
+          </select>
+        </label>
+        <label class="block md:col-span-2">
+          <span class="text-xs text-slate-500">Notes</span>
+          <input id="f_notes" class="mt-1 w-full px-3 py-2 border rounded-lg" />
+        </label>
+      </div>
+
+      <h3 class="font-semibold text-sm mt-5 mb-2">Line items</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-xs uppercase text-slate-500 border-b">
+            <tr>
+              <th class="text-left py-2">Item Code</th>
+              <th class="text-left">Description</th>
+              <th class="text-right">Qty</th>
+              <th class="text-right">Unit Price</th>
+              <th class="text-right">Line Total</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="itemsBody"></tbody>
+        </table>
+      </div>
+      <button id="addItem" class="mt-2 text-xs text-blue-600 hover:underline">+ Add line</button>
+
+      <div class="grid grid-cols-3 gap-3 mt-4 text-sm">
+        <label class="block">
+          <span class="text-xs text-slate-500">Subtotal</span>
+          <input id="f_subtotal" type="number" step="0.01" class="mt-1 w-full px-3 py-2 border rounded-lg" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-slate-500">Tax</span>
+          <input id="f_tax" type="number" step="0.01" class="mt-1 w-full px-3 py-2 border rounded-lg" />
+        </label>
+        <label class="block">
+          <span class="text-xs text-slate-500">Total</span>
+          <input id="f_total" type="number" step="0.01" class="mt-1 w-full px-3 py-2 border rounded-lg font-semibold" />
+        </label>
+      </div>
+
+      <div class="flex items-center justify-end gap-3 mt-5 pt-4 border-t">
+        <button id="saveBtn" class="px-4 py-2 rounded-lg border hover:bg-slate-50 text-sm">Save draft</button>
+        <button id="rejectBtn" class="px-4 py-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 text-sm">Reject</button>
+        <button id="approveBtn" class="px-5 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 text-sm font-medium">
+          Approve &amp; push to Bravo
+        </button>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<div id="toast" class="fixed bottom-6 right-6 hidden bg-slate-800 text-white text-sm px-4 py-2 rounded-lg shadow-lg"></div>
+
+<script>
+const API = location.origin.includes("localhost") || location.origin.includes("127.0.0.1")
+  ? "http://localhost:8000"
+  : "";  // same-origin behind nginx
+
+let currentOrderId = null;
+
+const $  = (id) => document.getElementById(id);
+const setStep = (id, state) => { $(`step-${id}`).className = `step ${state}`;
+   $(`step-${id}`).innerText = $(`step-${id}`).innerText.replace(/^[○●✓]/, state === 'done' ? '✓' : '●'); };
+const toast = (msg, ok=true) => {
+  const t = $("toast"); t.innerText = msg;
+  t.className = `fixed bottom-6 right-6 ${ok ? 'bg-slate-800' : 'bg-red-600'} text-white text-sm px-4 py-2 rounded-lg shadow-lg`;
+  t.classList.remove("hidden");
+  setTimeout(()=>t.classList.add("hidden"), 3500);
+};
+
+// Health check
+fetch(`${API}/api/v1/health`).then(r=>r.json()).then(h=>{
+  $("health").innerText = `${h.status} · v${h.version} · OCR:${h.ocr_available?'on':'off'} · Bravo:${h.bravo_mode}`;
+}).catch(()=> $("health").innerText = "API offline");
+
+$("file").onchange = (e) => {
+  const f = e.target.files[0];
+  $("filename").innerText = f ? `${f.name} (${(f.size/1024).toFixed(0)} KB)` : "";
+};
+
+$("processBtn").onclick = async () => {
+  const f = $("file").files[0];
+  if (!f) { toast("Pick a file first", false); return; }
+  $("processBtn").disabled = true;
+  setStep("upload","active");
+  try {
+    const fd = new FormData(); fd.append("file", f);
+    const up = await fetch(`${API}/api/v1/upload`, { method: "POST", body: fd }).then(r=>r.json());
+    if (up.detail) throw new Error(up.detail);
+    currentOrderId = up.order_id;
+    setStep("upload","done"); setStep("ocr","done");
+    $("ocrText").innerText = up.ocr_text || "(empty)";
+    $("ocrConf").innerText = `confidence ${(up.ocr_confidence*100).toFixed(0)}% · ${up.processing_ms} ms`;
+
+    setStep("parse","active");
+    const ex = await fetch(`${API}/api/v1/extract/${up.order_id}`, { method: "POST" }).then(r=>r.json());
+    if (ex.detail) throw new Error(ex.detail);
+    setStep("parse","done"); setStep("review","active");
+    populate(ex.order);
+    toast(`Parsed via ${ex.parser_method} in ${ex.processing_ms} ms`);
+    refreshRecent();
+  } catch (e) {
+    toast(e.message || "Pipeline error", false);
+  } finally {
+    $("processBtn").disabled = false;
+  }
+};
+
+function populate(o) {
+  $("f_customer").value = o.customer_name || "";
+  $("f_po").value       = o.po_number || "";
+  $("f_date").value     = o.order_date || "";
+  $("f_currency").value = o.currency || "USD";
+  $("f_notes").value    = o.notes || "";
+  $("f_subtotal").value = o.subtotal || 0;
+  $("f_tax").value      = o.tax || 0;
+  $("f_total").value    = o.total || 0;
+  const conf = Math.round((o.confidence || 0) * 100);
+  $("confFill").style.width = `${conf}%`;
+  $("confPct").innerText = `${conf}%`;
+  $("itemsBody").innerHTML = "";
+  (o.items || []).forEach(addRow);
+  if ((o.items||[]).length === 0) addRow({});
+}
+
+function addRow(it) {
+  const tr = document.createElement("tr");
+  tr.className = "border-b last:border-0";
+  tr.innerHTML = `
+    <td class="py-2 pr-2"><input class="w-full px-2 py-1 border rounded" value="${it.item_code||''}"></td>
+    <td class="pr-2"><input class="w-full px-2 py-1 border rounded" value="${(it.description||'').replace(/"/g,'&quot;')}"></td>
+    <td class="pr-2"><input type="number" step="0.01" class="w-20 px-2 py-1 border rounded text-right" value="${it.quantity||0}"></td>
+    <td class="pr-2"><input type="number" step="0.01" class="w-24 px-2 py-1 border rounded text-right" value="${it.unit_price||0}"></td>
+    <td class="pr-2"><input type="number" step="0.01" class="w-24 px-2 py-1 border rounded text-right" value="${it.line_total||0}"></td>
+    <td class="pr-2"><button class="text-red-500 text-xs">✕</button></td>`;
+  tr.querySelector("button").onclick = () => tr.remove();
+  $("itemsBody").appendChild(tr);
+}
+$("addItem").onclick = () => addRow({});
+
+function collectOrder() {
+  const items = [...$("itemsBody").querySelectorAll("tr")].map(tr => {
+    const i = tr.querySelectorAll("input");
+    return {
+      item_code: i[0].value, description: i[1].value,
+      quantity: parseFloat(i[2].value)||0, unit_price: parseFloat(i[3].value)||0,
+      line_total: parseFloat(i[4].value)||0, confidence: 1.0
+    };
+  }).filter(x => x.item_code);
+  return {
+    customer_name: $("f_customer").value, po_number: $("f_po").value,
+    order_date: $("f_date").value || null, currency: $("f_currency").value,
+    notes: $("f_notes").value, items,
+    subtotal: parseFloat($("f_subtotal").value)||0,
+    tax: parseFloat($("f_tax").value)||0,
+    total: parseFloat($("f_total").value)||0,
+    confidence: 1.0
+  };
+}
+
+$("saveBtn").onclick = async () => {
+  if (!currentOrderId) return toast("No active order", false);
+  const r = await fetch(`${API}/api/v1/orders/${currentOrderId}`, {
+    method: "PUT", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ order: collectOrder() })
+  }).then(r=>r.json());
+  toast(r.updated ? "Draft saved" : "Save failed", !!r.updated);
+};
+
+$("approveBtn").onclick = async () => {
+  if (!currentOrderId) return toast("No active order", false);
+  await fetch(`${API}/api/v1/orders/${currentOrderId}`, {
+    method: "PUT", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ order: collectOrder() })
+  });
+  setStep("bravo","active");
+  const r = await fetch(`${API}/api/v1/orders/${currentOrderId}/approve`, { method: "POST" }).then(r=>r.json());
+  if (r.detail) { toast(r.detail, false); return; }
+  setStep("bravo","done");
+  toast(`✓ Bravo SO created: ${r.external_id} (${r.bravo_mode})`);
+  refreshRecent();
+};
+
+$("rejectBtn").onclick = async () => {
+  if (!currentOrderId) return;
+  await fetch(`${API}/api/v1/orders/${currentOrderId}/reject`, { method: "POST" });
+  toast("Order rejected");
+  refreshRecent();
+};
+
+async function refreshRecent() {
+  try {
+    const list = await fetch(`${API}/api/v1/orders`).then(r=>r.json());
+    $("recent").innerHTML = list.slice(0, 8).map(o => `
+      <div class="flex items-center justify-between border-b last:border-0 pb-1">
+        <div class="truncate mr-2">${o.filename}</div>
+        <span class="px-2 py-0.5 rounded-full text-[10px] ${
+          o.status==='approved'?'bg-emerald-100 text-emerald-700':
+          o.status==='rejected'?'bg-red-100 text-red-700':
+          o.status==='failed'?'bg-amber-100 text-amber-700':
+          'bg-slate-100 text-slate-700'
+        }">${o.status}</span>
+      </div>`).join("") || "<div class='text-slate-400'>No orders yet</div>";
+  } catch {}
+}
+refreshRecent();
+</script>
+</body>
+</html>

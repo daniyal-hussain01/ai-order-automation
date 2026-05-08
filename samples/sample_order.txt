@@ -1,0 +1,15 @@
+Acme Corporation — Sales Order
+================================
+Customer: Globex Industries Ltd.
+PO Number: PO-2025-00417
+Date: 2025-04-30
+Currency: USD
+
+Item Code     Description              Qty    Unit Price    Line Total
+SKU-1001      Industrial Widget A       10       12.50        125.00
+SKU-1002      Industrial Widget B        5       30.00        150.00
+ABC-2210      Premium Mounting Bracket   2      199.99        399.98
+
+Subtotal: $674.98
+Tax:       $54.00
+Total:    $728.98
