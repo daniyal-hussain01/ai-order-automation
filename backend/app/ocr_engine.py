@@ -76,8 +76,24 @@ class OCREngine:
                 img, lang=settings.OCR_LANG,
                 output_type=self._pytesseract.Output.DICT,
             )
-            words = [w for w in data.get("text", []) if w and w.strip()]
-            text = " ".join(words)
+            # Reconstruct text preserving line breaks using tesseract's block/par/line
+            # numbers. Without this, all words collapse onto one line and downstream
+            # line-by-line parsers (e.g. line-item extraction) only see the first match.
+            lines: dict = {}
+            order: list = []
+            for i, w in enumerate(data.get("text", [])):
+                if not w or not w.strip():
+                    continue
+                key = (
+                    data.get("block_num", [0])[i],
+                    data.get("par_num", [0])[i],
+                    data.get("line_num", [0])[i],
+                )
+                if key not in lines:
+                    lines[key] = []
+                    order.append(key)
+                lines[key].append(w)
+            text = "\n".join(" ".join(lines[k]) for k in order)
             # tesseract confidences in [0,100], -1 means missing
             nums = [float(c) for c in data.get("conf", []) if c not in ("-1", -1, "", None)]
             conf = (sum(nums) / len(nums) / 100.0) if nums else 0.0
