@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 10
     env:
       ASM_BASE_URL: https://13-233-25-75.nip.io
-      SCAN_TARGET: 54.227.232.205
+      SCAN_TARGET: scanme.nmap.org
       ASM_API_KEY: ${{ secrets.ASM_API_KEY }}
     steps:
       - name: Checkout
