@@ -14,6 +14,7 @@ jobs:
       ASM_BASE_URL: https://13-233-25-75.nip.io
       SCAN_TARGET: scanme.nmap.org
       ASM_API_KEY: ${{ secrets.ASM_API_KEY }}
+      HIGH_RISK_THRESHOLD: "0.3"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -149,6 +150,7 @@ jobs:
         shell: bash
         env:
           RESULT_FILE: ${{ steps.poll.outputs.result_file }}
+          HIGH_RISK_THRESHOLD: ${{ env.HIGH_RISK_THRESHOLD }}
         run: |
           set -euo pipefail
 
@@ -159,6 +161,10 @@ jobs:
             | map(select((.severity // "" | ascii_downcase) as $s | $s == "high" or $s == "critical"))
             | length
           ' "${RESULT_FILE}")
+          n_above_demo_threshold=$(jq -r --argjson threshold "${HIGH_RISK_THRESHOLD}" '
+            [(.result.assets // [])[] | (.cves // [])[] | select((.risk_score // 0) > $threshold)] | length
+          ' "${RESULT_FILE}")
+          echo "n_above_demo_threshold (>${HIGH_RISK_THRESHOLD})=${n_above_demo_threshold}"
 
           echo "n_high_risk_cves=${n_high}"
           echo "total_misconfigs=${total_misc}"
@@ -178,6 +184,11 @@ jobs:
           if (( total_misc > 0 )); then
             blocked=1
             reasons+=("total_misconfigs=${total_misc} (>0)")
+          fi
+
+          if (( n_above_demo_threshold > 0 )); then
+            blocked=1
+            reasons+=("${n_above_demo_threshold} CVE(s) scoring above demo threshold ${HIGH_RISK_THRESHOLD}")
           fi
 
           if (( blocked == 1 )); then
