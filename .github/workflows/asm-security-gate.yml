@@ -1,0 +1,190 @@
+name: ASM Security Gate
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  asm-security-gate:
+    name: asm-security-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ASM_BASE_URL: https://13-233-25-75.nip.io
+      SCAN_TARGET: 54.227.232.205
+      ASM_API_KEY: ${{ secrets.ASM_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trigger ASM scan
+        id: trigger
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Submitting scan for target: ${SCAN_TARGET}"
+
+          response=$(mktemp)
+          http_code=$(curl -sS -o "${response}" -w "%{http_code}" \
+            -X POST "${ASM_BASE_URL}/scan" \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: ${ASM_API_KEY}" \
+            -d "$(jq -nc --arg t "${SCAN_TARGET}" '{target: $t}')") || true
+          http_code="${http_code:-000}"
+
+          if [[ "${http_code}" -lt 200 || "${http_code}" -ge 300 ]]; then
+            echo "::error::POST /scan returned HTTP ${http_code}"
+            echo "Response body:"
+            cat "${response}" || true
+            exit 1
+          fi
+
+          job_id=$(jq -r '.job_id // empty' < "${response}")
+          if [[ -z "${job_id}" ]]; then
+            echo "::error::POST /scan response did not contain job_id"
+            cat "${response}"
+            exit 1
+          fi
+
+          echo "Scan accepted. job_id=${job_id}"
+          echo "job_id=${job_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Poll scan status
+        id: poll
+        shell: bash
+        env:
+          JOB_ID: ${{ steps.trigger.outputs.job_id }}
+        run: |
+          set -euo pipefail
+
+          deadline=$(( $(date +%s) + 300 ))
+          interval=15
+          result_file="${GITHUB_WORKSPACE}/asm-result.json"
+
+          while :; do
+            now=$(date +%s)
+            if (( now >= deadline )); then
+              echo "::error::ASM scan polling exceeded 300s timeout (job_id=${JOB_ID})"
+              exit 1
+            fi
+
+            response=$(mktemp)
+            http_code=$(curl -sS -o "${response}" -w "%{http_code}" \
+              -X GET "${ASM_BASE_URL}/scan/${JOB_ID}" \
+              -H "X-API-Key: ${ASM_API_KEY}") || true
+            http_code="${http_code:-000}"
+
+            if [[ "${http_code}" -lt 200 || "${http_code}" -ge 300 ]]; then
+              echo "::error::GET /scan/${JOB_ID} returned HTTP ${http_code}"
+              cat "${response}" || true
+              exit 1
+            fi
+
+            status=$(jq -r '.status // "unknown"' < "${response}")
+            echo "[$(date -u +%H:%M:%SZ)] status=${status}"
+
+            case "${status}" in
+              completed)
+                cp "${response}" "${result_file}"
+                echo "result_file=${result_file}" >> "${GITHUB_OUTPUT}"
+                break
+                ;;
+              failed)
+                error_msg=$(jq -r '.result.error // .error // "no error message provided"' < "${response}")
+                echo "::error::ASM scan failed to execute: ${error_msg}"
+                exit 1
+                ;;
+              *)
+                sleep "${interval}"
+                ;;
+            esac
+          done
+
+      - name: Print scan summary
+        shell: bash
+        env:
+          RESULT_FILE: ${{ steps.poll.outputs.result_file }}
+        run: |
+          set -euo pipefail
+
+          echo "::group::ASM scan summary"
+          jq -r '
+            "Target:                 \(.result.target // "n/a")",
+            "Scan duration (s):      \(.result.aggregate_summary.scan_duration_seconds // "n/a")",
+            "Total assets:           \(.result.aggregate_summary.total_assets // 0)",
+            "Total CVEs:             \(.result.aggregate_summary.total_cves // 0)",
+            "n_high_risk_cves:       \(.result.assets[0].risk_summary.n_high_risk_cves // 0)",
+            "max_risk_score:         \(.result.aggregate_summary.max_risk_across_assets // 0)",
+            "total_misconfigs:       \(.result.aggregate_summary.total_misconfigs // 0)",
+            "top_misconfig_severity: \(.result.assets[0].risk_summary.top_misconfig_severity // "none")",
+            "tool_versions:          \((.result.tool_versions // {}) | tostring)"
+          ' "${RESULT_FILE}"
+          echo "::endgroup::"
+
+          echo "::group::Top 5 CVEs by risk_score"
+          jq -r '
+            (.result.assets[0].cves // [])
+            | sort_by(-(.risk_score // 0))
+            | .[0:5]
+            | if length == 0 then "No CVEs reported."
+              else
+                (map("  \(.cve_id // "?")  risk_score=\(.risk_score // 0)") | join("\n"))
+              end
+          ' "${RESULT_FILE}"
+          echo "::endgroup::"
+
+          echo "::group::Misconfigurations"
+          jq -r '
+            (.result.assets[0].misconfigs // [])
+            | if length == 0 then "No misconfigurations reported."
+              else
+                (map("  template_id=\(.template_id // "?")  severity=\(.severity // "?")  matched_at=\(.matched_at // "?")") | join("\n"))
+              end
+          ' "${RESULT_FILE}"
+          echo "::endgroup::"
+
+      - name: Apply security gate
+        shell: bash
+        env:
+          RESULT_FILE: ${{ steps.poll.outputs.result_file }}
+        run: |
+          set -euo pipefail
+
+          n_high=$(jq -r '.result.assets[0].risk_summary.n_high_risk_cves // 0' "${RESULT_FILE}")
+          total_misc=$(jq -r '.result.aggregate_summary.total_misconfigs // 0' "${RESULT_FILE}")
+          high_or_critical_misc=$(jq -r '
+            (.result.assets[0].misconfigs // [])
+            | map(select((.severity // "" | ascii_downcase) as $s | $s == "high" or $s == "critical"))
+            | length
+          ' "${RESULT_FILE}")
+
+          echo "n_high_risk_cves=${n_high}"
+          echo "total_misconfigs=${total_misc}"
+          echo "high_or_critical_misconfigs=${high_or_critical_misc}"
+
+          blocked=0
+          reasons=()
+
+          if (( n_high > 0 )); then
+            blocked=1
+            reasons+=("n_high_risk_cves=${n_high} (>0)")
+          fi
+          if (( high_or_critical_misc > 0 )); then
+            blocked=1
+            reasons+=("${high_or_critical_misc} misconfig(s) at severity high/critical")
+          fi
+          if (( total_misc > 0 )); then
+            blocked=1
+            reasons+=("total_misconfigs=${total_misc} (>0)")
+          fi
+
+          if (( blocked == 1 )); then
+            joined=$(printf '%s; ' "${reasons[@]}")
+            joined="${joined%; }"
+            echo "::error::ASM security gate blocked the deploy: ${joined}"
+            exit 1
+          fi
+
+          echo "::notice::ASM security gate passed. No high-risk CVEs and no misconfigurations detected."
