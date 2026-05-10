@@ -39,7 +39,7 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-Open **http://localhost** in a browser.
+Open **http://54.227.232.205/** in a browser.
 
 That's it. Upload any invoice/order image or PDF, watch the pipeline run, edit the parsed fields if needed, click **Approve** to push to Bravo (mock by default).
 
